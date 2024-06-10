@@ -1,5 +1,5 @@
 from data_provider.data_loader import Dataset_ETT_hour, Dataset_ETT_minute, Dataset_Custom, PSMSegLoader, \
-    MSLSegLoader, SMAPSegLoader, SMDSegLoader, SWATSegLoader, UEAloader, GLUONTSDataset
+    MSLSegLoader, SMAPSegLoader, SMDSegLoader, SWATSegLoader, UEAloader, GLUONTSDataset, FMCG
 from data_provider.uea import collate_fn
 import torch
 from torch.utils.data import DataLoader, Subset
@@ -11,6 +11,7 @@ data_dict = {
     'ETTm1': Dataset_ETT_minute,
     'ETTm2': Dataset_ETT_minute,
     'custom': Dataset_Custom,
+    'FMCG': FMCG,
     # 'm4': Dataset_M4,  Removed due to the LICENSE file constraints of m4.py
     'PSM': PSMSegLoader,
     'MSL': MSLSegLoader,
