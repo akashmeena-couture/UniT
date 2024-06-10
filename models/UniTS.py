@@ -12,6 +12,7 @@ from timm.layers.helpers import to_2tuple
 
 def calculate_unfold_output_length(input_length, size, step):
     # Calculate the number of windows
+    # print(f"input_length{input_length}, size {size}, step {step}")
     num_windows = (input_length - size) // step + 1
     return num_windows
 
@@ -549,10 +550,14 @@ class ForecastHead(nn.Module):
         x = self.proj_out(x)
 
         bs, n_vars = x.shape[0], x.shape[1]
+        # print(x.size())
         x = x.reshape(-1, x.shape[-2], x.shape[-1])
         x = x.permute(0, 2, 1)
+        
+        # y = torch.randn(1,16,1).to(x.device)
         x = torch.nn.functional.fold(x, output_size=(
             pred_len, 1), kernel_size=(self.patch_len, 1), stride=(self.stride, 1))
+        # print(x.size())
         x = x.squeeze(dim=-1)
         x = x.reshape(bs, n_vars, -1)
         x = x.permute(0, 2, 1)
@@ -614,13 +619,19 @@ class Model(nn.Module):
                     padding = 0
                 else:
                     padding = args.patch_len - remainder
+                # print('config',configs_list[i],'padding',padding)
+                # breakpoint()
                 input_token_len = calculate_unfold_output_length(
                     configs_list[i][1]['seq_len']+padding, args.stride, args.patch_len)
+                
                 input_pad = args.stride * \
                     (input_token_len - 1) + args.patch_len - \
                     configs_list[i][1]['seq_len']
+                
                 pred_token_len = calculate_unfold_output_length(
                     configs_list[i][1]['pred_len']-input_pad, args.stride, args.patch_len)
+                # pred_token_len = 1
+
                 real_len = configs_list[i][1]['seq_len'] + \
                     configs_list[i][1]['pred_len']
                 self.cls_nums[task_data_name] = [pred_token_len,
@@ -686,6 +697,7 @@ class Model(nn.Module):
         this_prompt = prefix_prompt.repeat(x.shape[0], 1, 1, 1)
 
         if task_name == 'forecast':
+            # task_prompt = 1  ######## Hardcoded
             this_mask_prompt = task_prompt.repeat(
                 x.shape[0], 1, task_prompt_num, 1)
             init_full_input = torch.cat(
@@ -753,7 +765,9 @@ class Model(nn.Module):
         x = self.prepare_prompt(
             x, n_vars, prefix_prompt, task_prompt, task_prompt_num, task_name='forecast')
 
-        seq_token_len = x.shape[-2]-prefix_prompt.shape[2]
+        # seq_token_len = x.shape[-2]-prefix_prompt.shape[2]
+        seq_token_len = 1   
+        
         x = self.backbone(x, prefix_prompt.shape[2], seq_token_len)
 
         x = self.forecast_head(
