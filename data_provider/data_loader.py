@@ -10,7 +10,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import StandardScaler
 from utils.timefeatures import time_features
-# from data_provider.m4 import M4Dataset, M4Meta # removed due to 
+from data_provider.m4 import M4Dataset, M4Meta  
 from data_provider.uea import subsample, interpolate_missing, Normalizer
 from sktime.datasets import load_from_tsfile_to_dataframe
 import warnings
@@ -108,6 +108,8 @@ class Dataset_ETT_hour(Dataset):
     def inverse_transform(self, data):
         return self.scaler.inverse_transform(data)
 
+    
+#*********************************************************************************#
 
 class Dataset_ETT_minute(Dataset):
     def __init__(self, root_path, flag='train', size=None,
@@ -181,6 +183,8 @@ class Dataset_ETT_minute(Dataset):
 
         self.data_x = data[border1:border2]
         self.data_y = data[border1:border2]
+        
+        print('lenth of test dataset',len(self.data_x))
         self.data_stamp = data_stamp
 
     def __getitem__(self, index):
@@ -193,7 +197,7 @@ class Dataset_ETT_minute(Dataset):
         seq_y = self.data_y[r_begin:r_end]
         seq_x_mark = self.data_stamp[s_begin:s_end]
         seq_y_mark = self.data_stamp[r_begin:r_end]
-
+        # breakpoint()
         return seq_x, seq_y, seq_x_mark, seq_y_mark
 
     def __len__(self):
@@ -302,6 +306,101 @@ class Dataset_Custom(Dataset):
 
     def inverse_transform(self, data):
         return self.scaler.inverse_transform(data)
+
+
+#************************************************************************************************************
+
+class FMCG(Dataset):
+    def __init__(self, root_path, flag='pred', size=None,
+                 features='S', data_path='',
+                 target='OT', scale=False, inverse=False, timeenc=0, freq='15min',
+                 seasonal_patterns='Monthly'):
+        # size [seq_len, label_len, pred_len]
+        # init
+        self.features = features
+        self.target = target
+        self.scale = scale
+        self.inverse = inverse
+        self.timeenc = timeenc
+        self.root_path = root_path
+
+        self.seq_len = size[0]
+        self.label_len = size[1]
+        self.pred_len = size[2]
+
+        self.seasonal_patterns = 'Monthly'
+        self.history_size = M4Meta.history_size[self.seasonal_patterns]  #1.5
+        self.window_sampling_limit = int(self.history_size * self.pred_len) # 1.5*1
+        # self.window_sampling_limit = 0
+        self.flag = flag
+
+        self.__read_data__()
+
+    def __read_data__(self):
+        # M4Dataset.initialize()
+        if self.flag == 'train':
+            dataset = M4Dataset.load(
+                training=True, dataset_file=self.root_path)
+        else:
+            dataset = M4Dataset.load(
+                training=False, dataset_file=self.root_path)
+        training_values = np.array(
+            [v[~np.isnan(v)] for v in
+             dataset.values[dataset.groups == self.seasonal_patterns]]) 
+        self.ids = np.array(
+            [i for i in dataset.ids[dataset.groups == self.seasonal_patterns]])
+        self.timeseries = [ts for ts in training_values]
+
+    def __getitem__(self, index):
+        insample = np.zeros((self.seq_len, 1))
+        insample_mask = np.zeros((self.seq_len, 1))
+        outsample = np.zeros((self.pred_len + self.label_len, 1))
+        outsample_mask = np.zeros(
+            (self.pred_len + self.label_len, 1))  # m4 dataset
+        
+        sampled_id = self.ids[index]  ######################
+        
+        sampled_timeseries = self.timeseries[index]
+        
+        # cut_point = len(sampled_timeseries)-1
+        cut_point = 15
+        # cut_point = np.random.randint(low=max(1, len(sampled_timeseries) - self.window_sampling_limit),
+                                      # high=len(sampled_timeseries),
+                                      # size=1)[0]
+        insample_window = sampled_timeseries[max(
+            0, cut_point - self.seq_len):cut_point]
+        insample[-len(insample_window):, 0] = insample_window
+        insample_mask[-len(insample_window):, 0] = 1.0
+        outsample_window = sampled_timeseries[
+            cut_point - self.label_len:min(len(sampled_timeseries), cut_point + self.pred_len)]
+        outsample[:len(outsample_window), 0] = outsample_window
+        outsample_mask[:len(outsample_window), 0] = 1.0
+        return insample, outsample, insample_mask, outsample_mask
+
+    def __len__(self):
+        return len(self.timeseries)
+
+    def inverse_transform(self, data):
+        return self.scaler.inverse_transform(data)
+
+    def last_insample_window(self):
+        print('Hello this is last insample window')
+        """
+        The last window of insample size of all timeseries.
+        This function does not support batching and does not reshuffle timeseries.
+
+        :return: Last insample window of all timeseries. Shape "timeseries, insample size"
+        """
+        insample = np.zeros((len(self.timeseries), self.seq_len))
+        insample_mask = np.zeros((len(self.timeseries), self.seq_len))
+        for i, ts in enumerate(self.timeseries):
+            ts_last_window = ts[-self.seq_len:]
+            insample[i, -len(ts):] = ts_last_window
+            insample_mask[i, -len(ts):] = 1.0
+        return insample, insample_mask
+
+    
+#**********************************************************************************************************
 
 # Removed due to the LICENSE file constraints of m4.py
 # class Dataset_M4(Dataset):
