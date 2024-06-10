@@ -10,7 +10,7 @@ from utils.ddp import get_world_size, is_main_process, gather_tensors_from_all_g
 from sklearn.metrics import precision_recall_fscore_support
 from sklearn.metrics import accuracy_score
 
-
+import pandas as pd
 import torch
 import torch.nn as nn
 from torch import optim
@@ -27,6 +27,8 @@ import copy
 
 warnings.filterwarnings('ignore')
 
+
+# global RESULT
 
 def apply_random_mask_for_imputation(x, patch_len, mask_rate):
     """
@@ -199,13 +201,14 @@ class Exp_All_Task(object):
                     self.args, task_config, flag, ddp=False)  # ddp false to avoid shuffle
                 data_set_list.append([train_data_set, data_set])
                 data_loader_list.append([train_data_loader, data_loader])
-                print(task_data_name, len(data_set))
+                # print(task_data_name, len(data_set))
             else:
                 data_set, data_loader = data_provider(
                     self.args, task_config, flag, ddp=True)
                 data_set_list.append(data_set)
                 data_loader_list.append(data_loader)
-                print(task_data_name, len(data_set))
+                # print(task_data_name, len(data_set))
+        # breakpoint()
         return data_set_list, data_loader_list
 
     def _select_optimizer(self):
@@ -350,8 +353,9 @@ class Exp_All_Task(object):
                     torch.save(self.model.state_dict(),
                                os.path.join(path, 'ptune_checkpoint.pth'))
                 else:
+                    print('Saving model for current epoch')
                     torch.save(self.model.state_dict(),
-                               os.path.join(path, 'checkpoint.pth'))
+                               os.path.join(path, 'trained_checkpoint_temp.pth'))  ##################
 
         if is_main_process():
             wandb.log({'Final_LF-mse': avg_forecast_mse,
@@ -376,6 +380,7 @@ class Exp_All_Task(object):
 
             task_name = self.task_data_config_list[task_id][1]['task_name']
             small_batch_size = self.task_data_config_list[task_id][1]['max_batch']
+            # print(small_batch_size)
             if small_batch_size != self.args.batch_size:
                 sample_list = self.split_batch(
                     sample_init, small_batch_size, task_name)
@@ -455,6 +460,9 @@ class Exp_All_Task(object):
 
         batch_x = batch_x.float().to(self.device_id)
         batch_y = batch_y.float().to(self.device_id)
+        
+        # print('input series',batch_x)
+        # print('output series',batch_y)
 
         dec_inp = None
         dec_inp = None
@@ -530,6 +538,8 @@ class Exp_All_Task(object):
 
     def test(self, setting, load_pretrain=False, test_data_list=None, test_loader_list=None):
         self.path = os.path.join(self.args.checkpoints, setting)
+        # print('load_pretrain', load_pretrain)   ##############################
+        # print('path',self.path)
         if not os.path.exists(self.path) and is_main_process():
             os.makedirs(self.path)
         if test_data_list is None or test_loader_list is None:
@@ -548,6 +558,7 @@ class Exp_All_Task(object):
                         if not ('cls_prompts' in k):
                             ckpt[k] = v
                 else:
+                    # pretrain_weight_path = '/app/notebooks/akash/UniTS/units_checkpoint/trained_checkpoint.pth'
                     ckpt = torch.load(pretrain_weight_path, map_location='cpu')
                 msg = self.model.load_state_dict(ckpt, strict=False)
                 print(msg)
@@ -562,7 +573,9 @@ class Exp_All_Task(object):
         avg_imputation_mse = []
         avg_imputation_mae = []
         avg_anomaly_f_score = []
+
         for task_id, (test_data, test_loader) in enumerate(zip(test_data_list, test_loader_list)):
+            print('task id is',task_id)
             task_name = self.task_data_config_list[task_id][1]['task_name']
             data_task_name = self.task_data_config_list[task_id][0]
             if task_name == 'long_term_forecast':
@@ -579,6 +592,7 @@ class Exp_All_Task(object):
                     wandb.log({'eval_LF-mae_'+data_task_name: mae})
                 avg_long_term_forecast_mse.append(mse)
                 avg_long_term_forecast_mae.append(mae)
+                # breakpoint()
             elif task_name == 'classification':
                 acc = self.test_classification(
                     setting, test_data, test_loader, data_task_name, task_id)
@@ -634,8 +648,11 @@ class Exp_All_Task(object):
         trues = []
 
         self.model.eval()
+        
+        # RESULT = pd.DataFrame()
+        
         with torch.no_grad():
-            for i, (batch_x, batch_y, _, _) in enumerate(test_loader):
+            for i, (batch_x, batch_y, _, _) in enumerate(test_loader): ############
                 batch_x = batch_x.float().to(self.device_id)
                 batch_y = batch_y.float().to(self.device_id)
 
@@ -643,6 +660,8 @@ class Exp_All_Task(object):
                 dec_inp = None
                 batch_x_mark = None
                 batch_y_mark = None
+                
+                # breakpoint()
 
                 with torch.cuda.amp.autocast():
                     outputs = self.model(
@@ -654,15 +673,22 @@ class Exp_All_Task(object):
 
                 outputs = outputs.detach().cpu()
                 batch_y = batch_y.detach().cpu()
+                
                 if test_data.scale and self.args.inverse:
                     outputs = test_data.inverse_transform(outputs)
                     batch_y = test_data.inverse_transform(batch_y)
-
                 pred = outputs
                 true = batch_y
-
+                
                 preds.append(pred)
                 trues.append(true)
+                
+                
+                # new_row = pd.DataFrame([{'item_id': item_id[0], 'predicted_sales': int(pred.item()), 'actual_sales': int(true.item())}])
+                # RESULT = pd.concat([RESULT, new_row])
+                
+                # print(f"item id is {item_id}, true value is {true}, predicted value is {pred}")
+                
                 del batch_x
                 del batch_y
 
@@ -676,7 +702,9 @@ class Exp_All_Task(object):
         mae, mse, rmse, mape, mspe = metric(preds, trues)
         print('data_task_name: {} mse:{}, mae:{}'.format(
             data_task_name, mse, mae), folder=self.path)
+        # breakpoint()
         torch.cuda.empty_cache()
+        # RESULT.to_csv('/app/notebooks/akash/UniTS/after_training_units_result.csv',index=False)
         return mse, mae
 
     def test_classification(self, setting, test_data, test_loader, data_task_name, task_id):
@@ -924,7 +952,7 @@ class Exp_All_Task(object):
 
         for data_loader_id in range(data_loader_cycle.num_dataloaders):
             batch_size = 1  # Initial batch size
-            max_batch_size = 0  # Record the maximum batch size before OOM
+            max_batch_size = 16  # Record the maximum batch size before OOM
             torch.cuda.synchronize()
             model_tmp.zero_grad(set_to_none=True)
             while True:
@@ -933,8 +961,8 @@ class Exp_All_Task(object):
                         data_loader_id, batch_size)  # 2 makes the memory larger
                     task_name = self.task_data_config_list[task_id][1]['task_name']
                     # Try running the function with the current batch size
-                    print(task_id, task_name,
-                          sample[0].shape, "max batch size", max_batch_size)
+                    # print(task_id, task_name,
+                          # sample[0].shape, "max batch size", max_batch_size)
                     if task_name == 'long_term_forecast':
                         loss = self.train_long_term_forecast(
                             model_tmp, sample, criterion_list[task_id], self.task_data_config_list[task_id][1], task_id)
@@ -961,7 +989,7 @@ class Exp_All_Task(object):
 
                 except Exception as e:
                     task_name = self.task_data_config_list[task_id][1]['task_name']
-                    print(task_id,  "max batch size:", max_batch_size)
+                    # print(task_id,  "max batch size:", max_batch_size)
                     # If any exception occurs, break the loop
                     self.task_data_config_list[task_id][1]['max_batch'] = max_batch_size
                     del model_tmp
